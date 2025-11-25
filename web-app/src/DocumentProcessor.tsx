@@ -71,6 +71,8 @@ const DocumentProcessor: React.FC = () => {
   const [generateCreatedDate, setGenerateCreatedDate] = useState(true);
   const [generateCustomFields, setGenerateCustomFields] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [processingDocumentId, setProcessingDocumentId] = useState<number | null>(null);
+  const [processingStep, setProcessingStep] = useState<string>("");
 
   // Custom hook to fetch initial data
   const fetchInitialData = useCallback(async () => {
@@ -105,9 +107,79 @@ const DocumentProcessor: React.FC = () => {
   const handleProcessDocuments = async () => {
     setProcessing(true);
     setError(null);
+    setProcessingStep("Preparing to process all documents...");
+
     try {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      setProcessingStep(`Generating suggestions for ${documents.length} document${documents.length > 1 ? 's' : ''}...`);
+
       const requestPayload: GenerateSuggestionsRequest = {
         documents,
+        generate_titles: generateTitles,
+        generate_tags: generateTags,
+        generate_correspondents: generateCorrespondents,
+        generate_created_date: generateCreatedDate,
+        generate_custom_fields: generateCustomFields,
+      };
+
+      const { data } = await axios.post<DocumentSuggestion[]>(
+        "./api/generate-suggestions",
+        requestPayload
+      );
+
+      setProcessingStep("Processing suggestions...");
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Post-process suggestions to add names and isSelected flag
+      const customFieldMap = new Map((allCustomFields || []).map(cf => [cf.id, cf.name]));
+      const processedSuggestions = data.map(suggestion => ({
+        ...suggestion,
+        suggested_custom_fields: suggestion.suggested_custom_fields?.map(cf => ({
+          ...cf,
+          name: customFieldMap.get(cf.id) || 'Unknown Field',
+          isSelected: true,
+        })),
+      }));
+
+      setSuggestions(processedSuggestions);
+    } catch (err) {
+      console.error("Error generating suggestions:", err);
+      setError("Failed to generate suggestions.");
+    } finally {
+      setProcessing(false);
+      setProcessingStep("");
+    }
+  };
+
+  const handleProcessSingleDocument = async (documentId: number) => {
+    const document = documents.find(d => d.id === documentId);
+    if (!document) return;
+
+    setProcessingDocumentId(documentId);
+    setError(null);
+
+    try {
+      // Show progress steps
+      setProcessingStep("Preparing document...");
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const steps = [];
+      if (generateTitles) steps.push("Generating title...");
+      if (generateTags) steps.push("Generating tags...");
+      if (generateCorrespondents) steps.push("Generating correspondent...");
+      if (generateCreatedDate) steps.push("Generating created date...");
+      if (generateCustomFields) steps.push("Generating custom fields...");
+
+      // Show each step briefly before making the API call
+      for (let i = 0; i < steps.length; i++) {
+        setProcessingStep(steps[i]);
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      setProcessingStep("Generating suggestions...");
+
+      const requestPayload: GenerateSuggestionsRequest = {
+        documents: [document],
         generate_titles: generateTitles,
         generate_tags: generateTags,
         generate_correspondents: generateCorrespondents,
@@ -131,12 +203,30 @@ const DocumentProcessor: React.FC = () => {
         })),
       }));
 
-      setSuggestions(processedSuggestions);
+      setProcessingStep("Applying suggestions...");
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Automatically apply suggestions for single document
+      const payload = processedSuggestions.map(suggestion => {
+        const { suggested_custom_fields, ...rest } = suggestion;
+        return {
+          ...rest,
+          suggested_custom_fields: suggested_custom_fields?.filter(cf => cf.isSelected),
+        };
+      });
+
+      await axios.patch("./api/update-documents", payload);
+
+      setProcessingStep("Complete!");
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      setIsSuccessModalOpen(true);
     } catch (err) {
-      console.error("Error generating suggestions:", err);
-      setError("Failed to generate suggestions.");
+      console.error("Error processing document:", err);
+      setError("Failed to process document.");
     } finally {
-      setProcessing(false);
+      setProcessingDocumentId(null);
+      setProcessingStep("");
     }
   };
 
@@ -293,26 +383,43 @@ const DocumentProcessor: React.FC = () => {
           processing={processing}
         />
       ) : suggestions.length === 0 ? (
-        <DocumentsToProcess documents={documents}>
+        <DocumentsToProcess
+          documents={documents}
+          onProcessDocument={handleProcessSingleDocument}
+          processingDocumentId={processingDocumentId || undefined}
+          processingStep={processingStep}
+        >
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-semibold text-gray-700 dark:text-gray-200">Documents to Process</h2>
             <div className="flex space-x-2">
               <button
                 onClick={reloadDocuments}
-                disabled={processing}
-                className="bg-blue-600 text-white dark:bg-blue-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-blue-700 dark:hover:bg-blue-900 focus:outline-none"
+                disabled={processing || processingDocumentId !== null}
+                className="bg-blue-600 text-white dark:bg-blue-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-blue-700 dark:hover:bg-blue-900 focus:outline-none disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 <ArrowPathIcon className="h-5 w-5" />
               </button>
               <button
                 onClick={handleProcessDocuments}
-                disabled={processing}
-                className="bg-blue-600 text-white dark:bg-blue-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-blue-700 dark:hover:bg-blue-900 focus:outline-none"
+                disabled={processing || processingDocumentId !== null}
+                className="bg-blue-600 text-white dark:bg-blue-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-blue-700 dark:hover:bg-blue-900 focus:outline-none disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
-                {processing ? "Processing..." : "Generate Suggestions"}
+                {processing ? "Processing..." : "Generate Suggestions (All)"}
               </button>
             </div>
           </div>
+
+          {processing && processingStep && (
+            <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
+              <div className="flex items-center space-x-3">
+                <svg className="animate-spin h-5 w-5 text-blue-600 dark:text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span className="text-blue-600 dark:text-blue-400 font-medium">{processingStep}</span>
+              </div>
+            </div>
+          )}
 
           <div className="flex space-x-4 mb-6">
             <label className="flex items-center space-x-2">

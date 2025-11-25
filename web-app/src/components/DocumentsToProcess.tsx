@@ -7,6 +7,10 @@ export interface DocumentsToProcessProps {
   // Optional props for selection
   selectedDocuments?: number[];
   onSelectDocument?: (documentId: number) => void;
+  // Optional props for individual processing
+  onProcessDocument?: (documentId: number) => void;
+  processingDocumentId?: number;
+  processingStep?: string;
   // Optional prop for grid layout
   gridCols?: string;
   children?: React.ReactNode;
@@ -16,6 +20,9 @@ const DocumentsToProcess: React.FC<DocumentsToProcessProps> = ({
   documents,
   selectedDocuments,
   onSelectDocument,
+  onProcessDocument,
+  processingDocumentId,
+  processingStep,
   gridCols = "1 md:grid-cols-2",
   children,
 }) => (
@@ -28,6 +35,9 @@ const DocumentsToProcess: React.FC<DocumentsToProcessProps> = ({
           document={doc}
           isSelected={selectedDocuments?.includes(doc.id)}
           onSelect={() => onSelectDocument && onSelectDocument(doc.id)}
+          onProcess={onProcessDocument}
+          isProcessing={processingDocumentId === doc.id}
+          processingStep={processingDocumentId === doc.id ? processingStep : undefined}
         />
       ))}
     </div>
